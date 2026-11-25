@@ -1,0 +1,296 @@
+# Rose & Ruin
+
+## Play on your Mac
+
+You need nothing installed: the whole game, its textures, sounds and the twenty castles and ten arenas, is one file, **`RoseAndRuin.html`** (about 16 MB).
+
+1. On GitHub, open **`RoseAndRuin.html`** in this repository and press the **Download raw file** button (the arrow at the top right of the file view). Or take the whole repository with **Code › Download ZIP** and unzip it.
+2. Double-click **`RoseAndRuin.html`**. It opens in your default browser and runs offline. **Chrome** or **Safari 17+** work best; Firefox works too.
+3. Click in the window to take up your weapon. Esc opens the menu.
+
+The repository also has **`Play Rose & Ruin.command`**, which opens the game in your default browser. If macOS says it cannot be opened because it is from an unidentified developer, right-click it, choose **Open**, then **Open** again (or just double-click the `.html` file instead).
+
+**Your progress** (renown and unlocked knights) is kept by the browser for that copy of the file. To carry it to another browser or a newer download, use **Settings › Your progress** to save a `.rrsave` file or copy a save code, then load it in the new copy.
+
+**For the best frame rate** on a MacBook, start at the **Medium** or **High** graphics setting (Settings › Graphics quality) and raise it if your machine keeps up; Apple-silicon Macs generally run **High** smoothly.
+
+### Building it yourself
+
+With [Node.js](https://nodejs.org) 20 or newer:
+
+```bash
+npm ci
+npm run build:standalone   # writes dist/RoseAndRuin.html
+npm run dev                # or play from a local server, with multiplayer
+```
+
+
+A large-scale medieval knight battle game for the browser, set during the Wars of the Roses (1455–1487). House Lancaster and House York field 5 to 100 knights each at twenty castles. You fight as one of them, watch the battle unfold with bots only, or join other players online.
+
+## Run it
+
+**Quickest:** download `RoseAndRuin.html` and open it in Chrome, Edge or Firefox: it runs offline from your disk, with nothing to install. Single player and bots-only battles work this way; multiplayer needs the server below. Build that file yourself with `npm run build:standalone` (it lands in `dist/`).
+
+**From source:**
+
+You need Node 20 or newer.
+
+```bash
+npm install
+```
+
+```bash
+npm run dev
+```
+
+Open http://localhost:5173. This starts the Vite dev server and the game server together, so single player, spectating and multiplayer all work.
+
+To build and serve a production copy (one process serves both the game and the multiplayer server):
+
+```bash
+npm run build
+```
+
+```bash
+npm start
+```
+
+Then open http://localhost:8787. Set `PORT` to use another port.
+
+Tests:
+
+```bash
+npm test
+```
+
+This runs the headless simulation checks (pose reach, map connectivity, a 150-second 24-vs-24 battle on every map) and the multiplayer smoke test against a real server.
+
+## Playing
+
+From the great hall:
+
+- **Take the Field**: choose castle, manner of battle, army size, bot prowess, house, time limit, reserves and friendly fire, then pick your knight in the armoury. The hosts stay drawn up until you press Space (or click) to sound the charge.
+
+**Bot prowess.** Higher levels give bots quicker reactions, surer guards and better aim, and they also fight more cleverly:
+
+- **Recruit**: plain brawlers, as before.
+- **Veteran**: finishes off wounded and reeling foes, and punishes openings more often.
+- **Champion**: minds his stamina and won't swing himself breathless. He flanks a foe who is busy with a comrade, cuts in under a slow heavy blow, and punishes a missed swing. When he is outnumbered and hurt he falls back on his friends, and the host sends men where the fighting is hardest.
+- **Legend**: the host fights as one. Knights share a target with one or two comrades but never mob it. They go for an enemy's back, rescue archers and badly wounded comrades, and march to the fighting grounds as a band. In conquest they weigh each objective by how many foes are on it and how many comrades are already heading there. Rallying cries and blessings wait until the line is close. A Legend also slips a blow aimed at the edge of its reach by stepping back, then strikes.
+
+In bot-versus-bot tests with the same reflexes and accuracy, Legend tactics won 13 of 14 pitched battles and 58% of single-combat rounds against the old brain.
+- **Watch the Battle**: start a battle of bots alone; it begins as soon as it loads. A director camera chooses shots; you can follow any knight or fly freely, and slow or speed up time.
+- **Join a Muster**: connect to a server, join a running battle or raise your own. Bots fill every place no player holds.
+
+### Controls
+
+| Action | Key |
+| --- | --- |
+| Move | W A S D |
+| Light attack / heavy attack (hold) | Left mouse |
+| Guard, raise shield and parry (archers: aim) | Right mouse or 3 |
+| Thrust (archers: rondel stab) | R or middle mouse |
+| Kick (breaks a guard) | F |
+| Abilities | Q, E |
+| Sprint, jump | Shift, Space |
+| Over the shoulder / through the visor | V |
+| Scoreboard | Tab |
+| Chat (multiplayer) | Enter |
+| Menu, pause and leave the battle (any time) | Esc or P |
+| Choose a knight (death screen, armoury, between duel rounds) | 1–9, 0, then Shift+1–9, 0, then Alt+1–4 (the orders are listed from least to most renown) |
+| Spectator: director / follow / free camera | 1 / 2 / 3 |
+| Spectator: previous / next knight | ← / → |
+| Spectator: slower / faster, pause | − / +, P |
+
+You can leave a battle at any moment: Esc opens the menu with **Leave the Battle** whether you are fighting, mustering, fallen or watching; the death screen has its own **Leave the Battle** button; and a castle that is still loading can be abandoned with **Turn Back**.
+
+Keys can be rebound in Settings, where you can also hide the crosshair (hit markers still show). Under **Your own keybinds** you can also add as many extra keys as you like (mouse side buttons too), each to any action: attack, guard, thrust, kick, either ability, sprint, jump, movement or change view. They work alongside the main keys and are saved in your browser.
+
+### Combat
+
+- **Guard**: hold right mouse to guard toward where you look. A guard turns a blow at the cost of stamina. Shield-bearers raise the shield to guard: it covers a wider arc, costs less stamina, and heater shields and pavises stop arrows.
+- **Shield durability**: every blow and arrow a shield turns wears it down (the bar under your stamina). Maces splinter shields fastest and a clean parry barely marks them. When a shield breaks the bearer reels for a moment, then fights on without it, guarding with his weapon alone, until he next takes the field. Buckler 160, heater 260, pavise 440.
+- **Parry**: raise the guard in the instant before a blow lands. It costs no stamina, staggers the attacker and opens a quicker riposte.
+- **Feint**: press guard during your own windup to cancel the blow.
+- **Breaking a guard**: kicks, shield bashes and heavy blows against an exhausted guard break it.
+- **Wounds**: blows land on the head (extra damage), torso or legs. Armour resists cuts best, blunt weapons less so, and points find the gaps in mail.
+- **Deaths**: a dying knight does not simply go limp. How he falls follows from the killing blow:
+  - a body wound staggers him back, hunched and clutching it, to his knees and over
+  - legs cut from under him drop him to his knees at once, arms thrown out
+  - an arrow makes him reel and slump
+  - bleeding out, he sways and sinks
+  - a heavy blow or a charge hurls him off his feet with a spin
+  - a blow to the head drops him where he stands
+  
+  Then the ragdoll takes over and the body comes to rest where it falls.
+- **Gore** (Settings: Off, Standard or Brutal; Brutal by default): on Brutal a heavy cut that kills through the head takes it off, and the head tumbles and rolls away. Killing wounds pump blood in pulses for a few heartbeats, pools spread beneath the fallen, and harness is soon caked.
+- **Slow-motion kills** (Settings, on by default): your heaviest killing blows play out for a moment in slow motion, in single player.
+
+### The orders
+
+| Class | Arms | Abilities |
+| --- | --- | --- |
+| Man-at-Arms | Arming sword and heater shield | Shield Bash, Rally to the Banner |
+| Vanguard | Two-handed greatsword | Whirlwind, Battle Charge |
+| Halberdier | Halberd | Impaling Lunge, Hook & Sweep |
+| Banneret | Poleaxe and full plate | Earthshaker, Iron Bulwark |
+| Longbowman | English longbow and rondel dagger | Arrow Storm, Bodkin Point |
+| Knight-Errant | Falchion and buckler | Sidestep, Bloodletting |
+| Pavisier | War spear and hand pavise | Shield Bash, Iron Bulwark |
+| Knight Bachelor | Flanged mace and heater shield | Shield Bash, Battle Charge |
+| Master of Defence | Longsword, little armour | Murder Stroke (reverse the sword and strike with the cross: crushes through plate and stuns, up to half a man's vigour), Bind & Disarm (bind a foe's blade and wrench it from him; useless against a raised shield) |
+| Brigand | War axe and brigandine | Wrestling Throw (hip-throw a foe to the ground; much heavier men may resist), Misericorde (the mercy dagger: half a downed or stunned foe's vigour, else a lesser stab) |
+| Battle Chaplain | Flanged mace and mail | Bind Wounds (heal yourself and the most hurt ally close by), Benediction (allies near you regain wind and cannot be staggered for a while) |
+| Pikeman | Pike | Brace for the Charge (set the butt: anyone who rushes or charges onto the point is impaled), Push of Pike (a long shove that drives a foe back and staggers him) |
+| Gallowglass | Sparth axe and mail | Hamstring (a low cut that lames a foe and bleeds him), Shield-Breaker (blows smash shields and guards apart) |
+| Standard-Bearer | Banner pole | Plant the Standard (the house banner driven into the ground: for 12 seconds comrades within 9 metres take 15% less harm and recover their wind faster), Call to Arms (you and comrades within 15 metres move a fifth faster for 5 seconds) |
+| Sapper | Maul | Caltrops (iron caltrops scattered ahead: any foe who treads on them is lamed for 4 seconds and bleeds; they lie for 15 seconds), Fire Pot (a pot of burning pitch hurled up to 14 metres; the fire burns foes in it for 6 seconds) |
+| Kern | Casting spear, javelins and buckler | Throw Javelin (cast where you aim; hits hard and staggers, though a shield catches it), Skirmish (spring back out of reach, then run a fifth faster for 4 seconds) |
+| Hammerer | Bec de corbin and full harness | Hook the Guard (the beak wrenches a raised shield or blade aside and breaks the guard; a foe not guarding is tripped), Ring the Helm (your next blow stuns for a second and a half and leaves him slowed) |
+| Cutthroat | Long rondel dagger, no armour | Flurry (three quick stabs that find the gaps), Sidestep. The fastest on his feet and with his hands, with medium reach, but the least harm per blow and next to no protection |
+
+The last ten are free from the start. Their abilities are things a fifteenth-century fighter could really do, drawn from the fight-books (the murder stroke, disarms, wrestling throws, the misericorde) and from the field (pike drill, the gallowglass's long axe, the chaplain's care for the wounded). In bot duels they win about 53–61% of rounds against the other base orders. Of the newest four, the Sapper and the Hammerer win 56–57% of bot duels. The Standard-Bearer (47%) and the Kern (43%) are made for the wider battle, where the planted standard, the call to arms and the javelins count for most.
+
+**Renowned orders.** Six more orders are won with renown, one after another:
+
+| Class | Arms | Abilities | Renown |
+| --- | --- | --- | --- |
+| Yeoman of the Guard | English bill | Bill Hook (drag a foe in and stun him), Hold the Line (30% less damage for the line) | 1,500 |
+| Knight Marshal | Hand-and-a-half sword | Half-Sword (thrusts pierce plate, harder and faster), War Cry (foes reel, allies hasten) | 4,000 |
+| Knight of the Garter | Arming sword and heater shield | Counterstroke (for 4 seconds the next blow turned on your shield stuns its striker), For Saint George! (you and comrades within 12 metres strike 15% harder for 8 seconds) | 6,000 |
+| Champion | Great axe and gilded plate | Executioner (a blow that leaves a foe below a third slays him), Juggernaut (unstoppable, bowls men over) | 8,000 |
+| Warlord | War poleaxe | Lord's Command (you and comrades within 15 metres recover 25 vigour, move faster and strike harder for 6 seconds), Cleave (a sweeping blow that harms and staggers every foe within 3 metres before you) | 10,000 |
+| Colossus | Great spear and tower shield | Bulwark of the Realm (you and comrades within 7 metres take 30% less harm for 6 seconds), Shield Slam (every foe within 3.5 metres before you is battered back and stunned) | 12,000 |
+
+In bot duels at equal skill against the base orders (which win about 60% at best), the Yeoman wins about 68%, the Marshal 78%, the Knight of the Garter 74%, the Champion 77%, the Warlord 77% and the Colossus 73%.
+
+The **Colossus** is the last and greatest of them. He stands nearly a third taller than other men and is broad to match. Every rating is at its highest except footspeed, which is the lowest in the game, and he tires quickly: every blow, guard, ability and sprint costs him 1.8 times the stamina. He carries a tower shield like a castle door (950 durability) and cannot be knocked off his feet by any blow, throw or charge. A good archer in open ground is still the bane of the slow.
+
+**Renown** is earned in battle: every point of your score (slaying, a share in a kill (an assist, worth 50 and announced as it happens), aiding comrades with your abilities, taking banners), plus 150 for seeing a battle through and 500 more for winning it. Renown is banked as you earn it, so if you leave a battle early (or close the page) you keep everything you won in it; only the bounty for seeing it through is forfeit. It is kept in your browser, for that copy of the game: a new download, another folder or browser, or the online page each start afresh. To carry it across, use Settings › Your progress: save it to a file (a `.rrsave` file, which no other program will try to open; older `.json` saves still load) or copy the save code, and load that into the other copy. Loading never lowers your renown; it brings your orders, keys and settings with it. The armoury shows how far you are from the next order, and a herald announces each one you win, which you may take to the field at once.
+
+Each order is built differently, and its hitboxes, reach and footprint in the crowd follow its build. The bigger a knight, the further his weapon reaches and the easier he is to hit:
+
+| Class | Height | Build | Attack speed |
+| --- | --- | --- | --- |
+| Banneret | 1.94 m | very broad | 15% slower |
+| Vanguard | 1.91 m | broad | 10% slower |
+| Halberdier | 1.87 m | lean | 5% slower |
+| Knight Bachelor | 1.84 m | sturdy | 5% slower |
+| Man-at-Arms | 1.80 m | average | 5% faster |
+| Pavisier | 1.80 m | thickset | ordinary |
+| Longbowman | 1.73 m | wiry | 5% faster (dagger) |
+| Knight-Errant | 1.71 m | slight | 15% faster |
+
+Attack speed scales the windup, release and recovery of every blow, so a quick order lands first and recovers sooner; exhaustion slows anyone down by a further quarter.
+
+Any order you have won can be chosen at the start and again every time you fall (keys 1 to 9, 0 and minus). When you fall you may also choose where to return: any of your house's mustering places at that castle (its camps and outposts at the fighting grounds), or nearest the fighting.
+
+
+**Auras.** Abilities that strengthen comrades leave a visible aura of motes drifting up around every knight they touch, for as long as the blessing lasts:
+- **gold** for strength: Rally to the Banner, For Saint George!, Lord's Command;
+- **silver-blue** for shelter: Hold the Line, Benediction, Plant the Standard, Bulwark of the Realm;
+- **pale green** for swiftness: War Cry, Call to Arms.
+
+### Manners of battle
+
+- **Pitched Battle**: each house has a reserve of men. Every fallen knight spends one; a house loses when its reserves are spent and its last knight dies. You may fight as each order you have (eighteen at first, twenty-four with every renowned order won) once: when an order falls it is spent, and after all of them you watch the rest of the battle.
+- **Conquest**: hold the castle's banners. A house holding more banners bleeds the enemy's reserves.
+- **Last Stand**: one life each; the last house standing wins.
+- **Single Combat**: you against one knight in an arena of your choosing (the castles are not offered for single combat, and the arenas only for it), to practise guards, parries, feints and timing. Nothing carries a fighter out of the arena: running, sidesteps, charges, shoves and knockbacks all stop at the wall, and the camera stays inside it too. Choose how many rounds win the day (3, 5 or 10), the foe's order (or any order, changing every round) and his prowess. Both fighters come back whole after each round. When a round ends, won or lost, there is a two-second breath, then the knight menu opens and you have six seconds (against a bot you can press Space or **Begin the Next Round** to go to your marks at once) to choose your order for the next round, with the mouse or the number keys (1–0, then Shift+1–0 and Alt+1–4). Then both fighters are set at their marks facing each other for a three-second countdown; you may look about during it, but your feet stay on the mark and no blow can be struck until it ends. Online, two players can duel each other.
+
+Health bars hang only over enemies; allies show just their names (spectators see everyone's).
+
+### The arenas
+
+Offered only for single combat, each a walled ring on open ground with a sand floor, stands and an arcade, ringed by the knights' pavilions:
+
+- **The Lists at Smithfield** (London, 1467): a long oval, 34 by 20 metres, where Lord Scales fought the Bastard of Burgundy.
+- **The Bear Pit at Southwark** (1471): a cramped round pit 17 metres across, with nowhere to go but forward.
+- **The Great Ring at Westminster** (1483): a great round arena 30 metres across, raised for the coronation tourney.
+- **The Octagon of the Pleasance** (Kenilworth, 1459): eight-sided, 22 metres across, with corners to pin a man in.
+- **The Square Yard of the Tower** (1471): a square walled yard 20 metres a side.
+- **The Hexagon of the Golden Tree** (Bruges, 1468): a broad six-sided ring 27 metres across, from Charles the Bold's wedding tourney.
+- **The Wedge at Calais** (1460): a small three-cornered yard whose corners close on a retreating man.
+- **The Narrow Lists at Eltham** (1480): a lane of a ring 40 metres long and only 13 across.
+- **The Five-Sided Yard at Norwich** (1469): a pentagon 24 metres across.
+- **The Colossal Ring of Coventry** (1459): the greatest arena of all, 42 metres across.
+
+### The castles
+
+Each castle sits in a wide stretch of country (roughly 400 by 400 metres) with open fighting grounds around it: a trampled meadow, a hill ringed by a broken palisade, a ruined chapel and its churchyard, a crossroads, and the nearby village. In a pitched battle the hosts split into bands that are sent to different grounds, so fights break out across the whole field, not only at the walls. Moats, rivers and the sea are not for wading: no knight is placed in the water, bots route around it, and a bank or bridge edge holds a knight back like a low wall (one who does end up in the water can always climb out).
+
+
+- **Bodiam Castle**, East Sussex, 1483: a moated quadrangular castle with bridges, barbican and a breach.
+- **Harlech Castle**, Gwynedd, 1468: a concentric fortress on a crag, with a great gatehouse.
+- **Bamburgh Castle**, Northumberland, 1464: on a basalt crag over the sea, its wall broken by cannon.
+- **The Tower of London**, 1471: the wards beneath the White Tower beside the Thames.
+- **Warwick Castle**, Warwickshire, 1469: Caesar's and Guy's towers, the barbican and Ethelfleda's Mound.
+- **Conwy Castle**, North Wales, 1461: eight drum towers on a rock above the estuary, two wards and a cross wall, the walled town to the west.
+- **Kenilworth Castle**, Warwickshire, 1459: the red keep and John of Gaunt's hall on the Great Mere, reached over the tiltyard causeway.
+- **Ludlow Castle**, Shropshire, 1459: the Duke of York's seat on its cliff above the Teme, with the round chapel and Norman great tower in the inner bailey. Come over Ludford Bridge to a fresh breach, or force the gate from the town.
+- **Middleham Castle**, Wensleydale, 1469: Warwick's stronghold, where a vast Norman keep leaves only a narrow ward to fight round. The old ringwork of William's Hill stands to the south-west.
+- **Raglan Castle**, Monmouthshire, 1468: Herbert's palace-fortress, with many-sided towers round the Pitched Stone and Fountain courts. The hexagonal Yellow Tower stands on its own moat, reached by a single bridge.
+- **Alnwick Castle**, Northumberland, 1462: the Percy stronghold above the Aln, two baileys round a shell keep of half-round towers, the barbican facing the town.
+- **Dunstanburgh Castle**, Northumberland, 1464: a vast ward on a whinstone headland above the North Sea, with the great keep-gatehouse and the Lilburn Tower. The south curtain is broken by the guns.
+- **Pembroke Castle**, Pembrokeshire, 1461: Jasper Tudor's fortress on a ridge between two rivers, its great round keep in the inner ward, the gatehouse facing the town.
+- **Caister Castle**, Norfolk, 1469: the Pastons' moated brick castle under Norfolk's siege, with a slender great tower, a bridged moat and a moated base court.
+- **Pontefract Castle**, Yorkshire, 1483: the key to the north, an oval curtain of seven towers on its rock, and a round keep of clustered drum towers on the old motte.
+- **Burg Hohenzollern**, Swabia, 1461: a Gothic fortress of tremendous size on the summit of the Zollerberg, eighty metres above the valleys, in driving rain and low cloud. Climb the mountain to the lower gate, then break the Eagle Gate of the inner fortress and take the great keep. The home hills of the German mercenaries who fought at Stoke.
+- **Carreg Cennen Castle**, Carmarthenshire, 1462: a crag-top fortress above a sheer cliff, reached by a walled ramp and barbican from the north.
+- **Hedingham Castle**, Essex, 1471: the de Vere earls' great Norman keep on its mound, an inner bailey, and an outer bailey across a dry ditch.
+- **Tattershall Castle**, Lincolnshire, 1469: Lord Cromwell's soaring brick tower within a wet inner moat and a dry outer one.
+- **Skipton Castle**, Yorkshire, 1461: the Cliffords' ring of six drum towers on a cliff over the beck, with a four-towered gatehouse facing the town.
+
+## How it works
+
+The simulation is shared TypeScript code (`src/shared`) that runs in the browser for single player and spectating, and on the server for multiplayer.
+
+- **Simulation** (`src/shared/sim`): a 60 Hz authoritative simulation. Hit detection sweeps the weapon blade along keyframed poses and tests it against head, torso and leg capsules. The same curve drives the animation, so a blow lands where it is seen to land.
+- **Combat**: blocking arcs, parries, ripostes, feints, kicks, stamina, heavy charges, arrows with drop and piercing, and twelve abilities.
+- **Bots** (`ai.ts`): bots press the same buttons a player does. They navigate the castles with A* and shared flow fields, hold guard stances, parry with human-like reaction times, use abilities, and archers lead their targets. Four difficulty levels change reactions and judgement.
+- **Castles** (`src/shared/world`): built procedurally from a sculpted heightfield, with walls, towers, gatehouses, keeps, bridges, breaches, moats and the sea. They are laid out after the real castles.
+- **Rendering** (`src/client/render`):
+  - three.js with physically based materials, using textures baked on the GPU at load
+  - real HDRI skies for image-based light, cascaded sun shadows, N8AO ambient occlusion
+  - height fog with sun in-scattering, bloom, an AgX filmic grade, SMAA, and depth of field in the armoury
+  - splat-mapped terrain with distance LODs, and instanced vegetation and grass
+  - moats, rivers and the sea that mirror the castles and the knights through planar reflections
+- **Knights** (`src/client/knights`):
+  - a 17-bone procedural skeleton with IK arms and legs and planted feet
+  - a man inside every harness: a continuous skinned body (torso, arms, legs, neck) that bends smoothly at the joints, and a sculpted head with a face, brows, beard and hair; skin tone and hair vary from knight to knight, and five orders wear open-faced helms
+  - each class's harness, weapon and body merged into a few meshes skinned on the GPU from a texture of bone matrices, with three levels of detail, so a hundred knights cost a few dozen draw calls
+  - tabards in the house colours, and blood and mud that build up per knight
+  - verlet ragdoll deaths whose muscle tone fades as the knight falls; every corpse stays on the field for the rest of the battle (settled bodies are posed once into a static pool), and arrows stay stuck in them
+- **Audio** (`src/client/audio`): everything is synthesised with WebAudio, including steel on steel, shield thuds, armour, voices, horns, the bow, footsteps and the battle din. Sounds are HRTF-positioned with stone-yard reverb, under a generative lute-and-drum score.
+- **Multiplayer** (`src/server`, `src/shared/net`):
+  - the server runs the matches at 60 Hz and streams compact binary snapshots at 20 Hz, plus events
+  - clients interpolate other knights 100 ms in the past and predict their own knight with the same movement code, reconciling against acknowledged inputs
+  - players can join a battle at any time, taking a bot's place and giving it back on leaving; when a battle ends the room moves on to the next castle
+
+### Performance
+
+- Settings › Graphics quality picks shadows, grass density, ambient occlusion and reflections. The default is chosen from your GPU (integrated GPUs start at Medium).
+- **Ultimate** is the top graphics level, for powerful graphics cards. On top of Ultra it:
+  - supersamples the image (1.5 to 2 rendered pixels for every pixel on screen)
+  - casts soft-edged shadows from four 4096-pixel cascades out to 600 m
+  - doubles the ambient occlusion samples and uses the strongest anti-aliasing
+  - adds shafts of sunlight through towers, trees and crowds
+  - doubles the texture resolution of armour, mail and cloth, and keeps knights at full detail out to 30 m (shadows to 140 m)
+  - draws finer terrain further out, more trees, denser grass reaching further, sharper texture filtering at grazing angles, and moat reflections at higher resolution redrawn every frame
+  
+  It is never picked automatically; choose it in Settings.
+- Settings › Colour picks the grade: **Vibrant** (the default) lifts the turf, the heraldry and the sky, **Natural** is neutral, and **Muted** is the grim, washed-out look.
+- Dynamic resolution (on by default) lowers the render scale while frames run long and raises it again when there is headroom.
+- Press **F3** in battle for a frame profiler: frame rate, time per stage, draw calls and triangles.
+
+### A note on photorealism
+
+Everything you see is generated in the browser: no 3D models or photographed textures are downloaded, apart from the five sky HDRIs. The lighting is physically based and image-based from real skies, with filmic tone mapping, shadows and AO, so the look is grounded in real light. Close up, the procedural armour and stone show their nature, though, and it is not film-grade photorealism. The biggest further steps would be scanned or sculpted knight models with motion-captured animation, and photogrammetry materials for the stone.
+
+## Credits
+
+The sky HDRIs are from [Poly Haven](https://polyhaven.com) under CC0: Aristea Wreck (Pure Sky), Syferfontein 18d Clear, Kiara 1 Dawn, Quarry 01 and Noon Grass. `tools/process_sky.py` turns them into lighting and background maps.
+
+The fonts are Cinzel, Cinzel Decorative and IM Fell English (SIL Open Font License), via Fontsource.
+
+All other art, sound and music is procedural.

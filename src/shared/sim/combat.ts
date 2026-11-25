@@ -1,0 +1,482 @@
+// Melee hit detection (blade sweeps against head/torso/leg volumes), blocking and parries,
+// kicks, arrows and arrow volleys.
+
+import { Act, type HitZone, type Team } from '../types';
+import { ARROW, type AttackDef } from '../data/weapons';
+import { DEG, angleDiff, clamp, lerp, segSegDist2, v3, yawTo, type V3 } from '../math';
+import { hitVolumes, newVolumes, type Knight } from './knight';
+import type { Match } from './match';
+import { applyAimPitch, aimPitchFor, bladeWorld, newPose, releasePose, releaseEase, HIT_FROM, HIT_TO } from './pose';
+import { attackSpeed, spend } from './actions';
+
+export interface Arrow {
+  id: number; owner: number; team: Team;
+  x: number; y: number; z: number;
+  vx: number; vy: number; vz: number;
+  dmg: number; bodkin: boolean; life: number; pierced: number; volley: boolean;
+  /** a thrown javelin: heavier, staggers, wears a shield hard */
+  jav?: boolean;
+}
+/** kind 0 caltrops, 1 burning pitch, 2 planted standard */
+export interface Hazard { kind: number; owner: number; team: Team; x: number; z: number; r: number; t: number; hit: number[]; pulse: number }
+export interface Volley { owner: number; team: Team; x: number; z: number; delay: number; left: number; timer: number; dirx: number; dirz: number }
+
+/** Damage multipliers by zone (head, torso, legs) and type (cut, blunt, pierce). */
+export const ZONE_MULT: readonly (readonly number[])[] = [
+  [1.6, 1.5, 1.7],
+  [1, 1, 1],
+  [0.75, 0.8, 0.75],
+];
+
+const pose = newPose();
+const base = v3(), tip = v3(), ptip = v3(), pbase = v3();
+const vol = newVolumes();
+const cand: Knight[] = [];
+
+export function resolveCombat(m: Match) {
+  for (const k of m.knights) {
+    if (!k.alive || k.act !== Act.Release) continue;
+    sweep(m, k);
+  }
+}
+
+function bladeAt(k: Knight, a: AttackDef, u: number, from: number, to: number, b: V3, t: V3) {
+  releasePose(a, u, pose);
+  applyAimPitch(pose, aimPitchFor(k.pitch));
+  bladeWorld(pose, k.x, k.y, k.z, k.yaw, from, to, b, t, k.def.size.height);
+}
+
+function sweep(m: Match, k: Knight) {
+  const a = k.weapon.attacks[k.atk];
+  const dur = k.actDur;
+  const t0 = k.relPrevT, t1 = Math.min(k.actT, dur);
+  if (t1 <= t0) { k.relPrevT = t1; return; }
+  const from = a.hitStart ?? k.weapon.hitStart, to = a.hitEnd ?? k.weapon.hitEnd;
+  const S = 4;
+  bladeAt(k, a, t0 / dur, from, to, pbase, ptip);
+  for (let s = 1; s <= S; s++) {
+    const u = (t0 + ((t1 - t0) * s) / S) / dur;
+    bladeAt(k, a, u, from, to, base, tip);
+    const ue = releaseEase(u);
+    if (ue >= HIT_FROM && ue <= HIT_TO) {
+      cand.length = 0;
+      m.hash.query(k.x, k.z, to + 1.6, (v) => {
+        if (v === k || !v.alive || v.invulnT > 0) return;
+        if (v.team === k.team && !m.settings.friendlyFire) return;
+        if (k.hitList.includes(v.id) || Math.abs(v.y - k.y) > 3) return;
+        cand.push(v);
+      });
+      if (cand.length > 1) cand.sort((p, q) => ((p.x - k.x) ** 2 + (p.z - k.z) ** 2) - ((q.x - k.x) ** 2 + (q.z - k.z) ** 2));
+      for (const v of cand) {
+        hitVolumes(v, vol);
+        const zone = bladeVsVolumes(base, tip, ptip);
+        if (zone < 0) continue;
+        contact(m, k, v, a, zone as HitZone, _hit.x, _hit.y, _hit.z, tip.x - ptip.x, tip.y - ptip.y, tip.z - ptip.z);
+        if (k.act !== Act.Release) break;
+      }
+      if (k.act !== Act.Release) { k.relPrevT = t1; return; }
+    }
+    pbase.x = base.x; pbase.y = base.y; pbase.z = base.z;
+    ptip.x = tip.x; ptip.y = tip.y; ptip.z = tip.z;
+  }
+  // aim assist for players: a blow that reaches the middle of its arc without touching anyone
+  // lands on the enemy under the crosshair, if he is within the weapon's reach
+  if (!k.bot && k.hitList.length === 0 && releaseEase(t0 / dur) < 0.55 && releaseEase(t1 / dur) >= 0.55) aimAssist(m, k, a, to);
+  k.relPrevT = t1;
+}
+
+const _aimV: V3 = { x: 0, y: 0, z: 0 }, _aimC: V3 = { x: 0, y: 0, z: 0 };
+function aimAssist(m: Match, k: Knight, a: AttackDef, hitEnd: number) {
+  const s = k.def.size.height;
+  const reach = (hitEnd + 0.75) * s;
+  const cp = Math.cos(k.pitch);
+  const dx = -Math.sin(k.yaw) * cp, dy = Math.sin(k.pitch), dz = -Math.cos(k.yaw) * cp;
+  const ex = k.x, ey = k.y + 1.55 * s, ez = k.z;
+  let best: Knight | null = null, bestAlong = Infinity, bestZone = 1 as HitZone;
+  m.hash.query(k.x, k.z, reach + 1, (v) => {
+    if (v === k || !v.alive || v.invulnT > 0) return;
+    if (v.team === k.team && !m.settings.friendlyFire) return;
+    const hd = Math.hypot(v.x - k.x, v.z - k.z);
+    if (hd > reach + v.radius) return;
+    hitVolumes(v, vol);
+    // closest approach of the aim ray to each body part
+    const test = (A: V3, B: V3, r: number, zone: HitZone) => {
+      const res = segSegDist2(_aimV, _aimC, A, B);
+      const along = res.s * 6;
+      if (res.dist2 < (r + 0.3) ** 2 && along > 0 && along < bestAlong) { bestAlong = along; best = v; bestZone = zone; }
+    };
+    _aimV.x = ex; _aimV.y = ey; _aimV.z = ez;
+    _aimC.x = ex + dx * 6; _aimC.y = ey + dy * 6; _aimC.z = ez + dz * 6;
+    test(vol.head, vol.head, vol.headR, 0);
+    test(vol.torsoA, vol.torsoB, vol.torsoR, 1);
+    test(vol.legsA, vol.legsB, vol.legsR, 2);
+  });
+  const v = best as Knight | null;
+  if (!v) return;
+  hitVolumes(v, vol);
+  const c = bestZone === 0 ? vol.head : bestZone === 1 ? vol.torsoB : vol.legsB;
+  contact(m, k, v, a, bestZone, c.x, c.y, c.z, dx, dy, dz);
+}
+
+const _hit = v3();
+const _mid = v3();
+const _pm = v3();
+
+/** Test blade (and the tip's path since the last sample) against the cached hit volumes. */
+function bladeVsVolumes(b: V3, t: V3, pt: V3): number {
+  let zone = -1, best = 1;
+  const test = (p: V3, q: V3) => {
+    let r = segSegDist2(p, q, vol.head, vol.head);
+    let ratio = Math.sqrt(r.dist2) / vol.headR;
+    if (ratio < best) { best = ratio; zone = 0; pointOn(p, q, r.s); }
+    r = segSegDist2(p, q, vol.torsoA, vol.torsoB);
+    ratio = Math.sqrt(r.dist2) / vol.torsoR;
+    if (ratio < best * 1.05 && ratio < 1) { if (zone !== 0 || ratio < best * 0.7) { best = ratio; zone = 1; pointOn(p, q, r.s); } }
+    r = segSegDist2(p, q, vol.legsA, vol.legsB);
+    ratio = Math.sqrt(r.dist2) / vol.legsR;
+    if (ratio < best && ratio < 1) { best = ratio; zone = 2; pointOn(p, q, r.s); }
+  };
+  test(b, t);
+  if (zone < 0) {
+    // the outer third of the blade's swept path
+    _mid.x = b.x + (t.x - b.x) * 0.66; _mid.y = b.y + (t.y - b.y) * 0.66; _mid.z = b.z + (t.z - b.z) * 0.66;
+    _pm.x = pt.x; _pm.y = pt.y; _pm.z = pt.z;
+    test(_pm, t);
+  }
+  return zone;
+}
+function pointOn(p: V3, q: V3, s: number) {
+  _hit.x = p.x + (q.x - p.x) * s; _hit.y = p.y + (q.y - p.y) * s; _hit.z = p.z + (q.z - p.z) * s;
+}
+
+export function isBlocking(v: Knight, ax: number, az: number): boolean {
+  const arc = v.blockArc;
+  if (v.act !== Act.Block || v.actT < 0.05 || arc <= 0) return false;
+  const half = (arc * DEG) / 2;
+  return Math.abs(angleDiff(v.yaw, yawTo(v.x, v.z, ax, az))) <= half;
+}
+
+/**
+ * Wear a knight's shield by `amount`. When it splinters the knight is left reeling and fights
+ * on without it until he next takes the field. Returns true if the shield broke.
+ */
+export function wearShield(m: Match, v: Knight, by: number, amount: number, x: number, y: number, z: number): boolean {
+  if (!v.shield || amount <= 0) return false;
+  v.shieldHp = Math.max(0, v.shieldHp - amount);
+  if (v.shieldHp > 0) return false;
+  m.emit({ t: 'shieldBreak', k: v.id, by, x, y, z });
+  if (v.alive && v.bulwarkT <= 0 && v.knockT <= 0) {
+    v.act = Act.Stagger; v.actT = 0; v.actDur = 0.7; v.heavy = false; v.draw = 0;
+  }
+  return true;
+}
+
+function contact(m: Match, k: Knight, v: Knight, a: AttackDef, zone: HitZone, px: number, py: number, pz: number, sdx: number, sdy: number, sdz: number) {
+  k.hitList.push(v.id);
+  const chargeF = k.heavy ? clamp(k.charge / Math.max(0.01, k.weapon.heavyChargeMax), 0, 1) : 0;
+  let dmg = a.damage * (1 + 0.25 * chargeF);
+  if (isBlocking(v, k.x, k.z)) {
+    const parry = v.actT <= v.weapon.parryWindow;
+    let cost = (k.heavy ? 26 : a.kind === 'thrust' ? 11 : 14) * v.blockStamina * (a.damage / 50);
+    if (parry) cost *= 0.25;
+    const shield = !!v.shield;
+    // Shield-Breaker: the blow smashes straight through the guard
+    const smash = k.sbT > 0;
+    if (smash) k.sbT = 0;
+    const broke = smash || (!parry && v.stamina < cost);
+    spend(v, cost);
+    m.emit({ t: 'block', a: k.id, v: v.id, x: px, y: py, z: pz, parry, shield, broke });
+    // the shield takes the blow: maces and axes splinter it fastest, a parry barely marks it
+    if (shield && wearShield(m, v, k.id, dmg * (a.dtype === 1 ? 1.35 : a.dtype === 2 ? 0.8 : 1) * (k.heavy ? 1.3 : 1) * (parry ? 0.3 : 1) * (smash ? 4 : 1), px, py, pz)) {
+      k.act = Act.Recover; k.actT = 0; k.actDur = a.recover * attackSpeed(k);
+      return;
+    }
+    if (broke) {
+      v.act = Act.Stagger; v.actT = 0; v.actDur = 0.85;
+      dmg *= 0.5 * ZONE_MULT[1][a.dtype] * (1 - v.def.armor[a.dtype]);
+      m.damage(v, k, dmg, { zone: 1, dtype: a.dtype, kind: 0, heavy: k.heavy, x: px, y: py, z: pz, dx: sdx, dy: sdy, dz: sdz, noStagger: true });
+      k.act = Act.Recover; k.actT = 0; k.actDur = a.recover * attackSpeed(k);
+    } else if (parry) {
+      k.act = Act.Parried; k.actT = 0; k.actDur = 0.8; k.heavy = false; k.charge = 0;
+      v.riposteT = 0.7;
+    } else {
+      k.act = Act.Deflect; k.actT = 0; k.actDur = 0.32; k.heavy = false; k.charge = 0;
+    }
+    // Counterstroke: the turned blow is answered on the instant
+    if (!broke && shield && v.counterT > 0) { v.counterT = 0; stun(m, k, 1.0); }
+    return;
+  }
+  // at the half-sword the point is guided into the gaps of the harness
+  const half = k.halfT > 0 && a.kind === 'thrust';
+  if (half) dmg *= 1.3;
+  // Murder Stroke: the sword reversed, the cross and pommel crush rather than cut
+  const mord = k.mordT > 0;
+  if (mord) k.mordT = 0;
+  const dtype = mord ? 1 : a.dtype;
+  dmg *= ZONE_MULT[zone][dtype] * (1 - v.def.armor[dtype] * (half ? 0.3 : mord ? 0.5 : 1));
+  // it rings a man's helm and lays him open; it does not fell a whole man in one blow
+  if (mord) dmg = Math.min(dmg, v.def.hp * 0.5);
+  const l = Math.hypot(sdx, sdy, sdz) || 1;
+  const died = m.damage(v, k, dmg, { zone, dtype, kind: 0, heavy: k.heavy, x: px, y: py, z: pz, dx: sdx / l, dy: sdy / l, dz: sdz / l });
+  if (!died && v.alive) {
+    if (k.bloodletT > 0 && a.dtype === 0) applyBleed(v, k);
+    if (zone === 0 && a.dtype === 1 && k.heavy && v.bulwarkT <= 0) stun(m, v, 0.7);
+    if (mord) stun(m, v, 1.0);
+    // Ring the Helm: the hammer face rings him senseless
+    if (k.ringT > 0) { k.ringT = 0; stun(m, v, 1.5); v.slowT = Math.max(v.slowT, 3); m.emit({ t: 'stun', k: v.id }); }
+    v.pushX += (sdx / l) * 1.2; v.pushZ += (sdz / l) * 1.2;
+  }
+  if (k.hitList.length >= a.maxTargets) {
+    k.act = Act.Recover; k.actT = 0; k.actDur = a.recover * attackSpeed(k) * 1.1;
+  }
+}
+
+export function applyBleed(v: Knight, by: Knight) {
+  v.bleedStacks = Math.min(3, v.bleedStacks + 1);
+  v.bleedT = 4;
+  v.bleedBy = by.id;
+}
+
+export function stun(m: Match, v: Knight, t: number) {
+  if (!v.alive || v.bulwarkT > 0 || v.juggerT > 0 || v.knockT > 0) return;
+  v.act = Act.Stun; v.actT = 0; v.actDur = t; v.stunT = t; v.draw = 0; v.heavy = false;
+  m.emit({ t: 'stun', k: v.id });
+}
+
+export function knockdown(m: Match, v: Knight, by: Knight, t: number) {
+  if (!v.alive || v.bulwarkT > 0 || v.juggerT > 0 || v.holdT > 0 || v.def.immovable) return;
+  v.act = Act.Knockdown; v.actT = 0; v.actDur = t; v.knockT = t; v.draw = 0; v.heavy = false;
+  v.vx *= 0.2; v.vz *= 0.2;
+  m.emit({ t: 'knockdown', k: v.id, by: by.id });
+}
+
+/** Enemies in a frontal cone. */
+export function frontal(m: Match, k: Knight, range: number, halfAngleDeg: number, fn: (v: Knight, d: number) => void) {
+  const fx = -Math.sin(k.yaw), fz = -Math.cos(k.yaw);
+  const cosA = Math.cos(halfAngleDeg * DEG);
+  m.hash.query(k.x, k.z, range + 0.5, (v) => {
+    if (v === k || !v.alive || v.invulnT > 0) return;
+    if (v.team === k.team && !m.settings.friendlyFire) return;
+    if (Math.abs(v.y - k.y) > 2.5) return;
+    const dx = v.x - k.x, dz = v.z - k.z;
+    const d = Math.hypot(dx, dz);
+    if (d > range + 0.3) return;
+    if (d > 0.05 && (dx * fx + dz * fz) / d < cosA) return;
+    fn(v, d);
+  });
+}
+
+/** Enemies within a radius. */
+export function radial(m: Match, k: Knight, r: number, fn: (v: Knight, d: number) => void) {
+  m.hash.query(k.x, k.z, r + 0.5, (v) => {
+    if (v === k || !v.alive || v.invulnT > 0) return;
+    if (v.team === k.team && !m.settings.friendlyFire) return;
+    if (Math.abs(v.y - k.y) > 2.5) return;
+    const d = Math.hypot(v.x - k.x, v.z - k.z);
+    if (d <= r) fn(v, d);
+  });
+}
+
+export function resolveKick(m: Match, k: Knight) {
+  let target: Knight | null = null, best = 1.7;
+  frontal(m, k, 1.65, 38, (v, d) => { if (d < best) { best = d; target = v; } });
+  const v = target as Knight | null;
+  if (!v) { m.emit({ t: 'kick', a: k.id, v: -1, hit: false, broke: false }); return; }
+  const fx = -Math.sin(k.yaw), fz = -Math.cos(k.yaw);
+  let broke = false;
+  const resist = v.bulwarkT > 0 ? 0.4 : 1;
+  v.pushX += fx * 4.6 * resist; v.pushZ += fz * 4.6 * resist;
+  if (v.bulwarkT <= 0 && v.knockT <= 0) {
+    if (v.act === Act.Block) { broke = true; spend(v, 22); v.act = Act.Stagger; v.actT = 0; v.actDur = 0.95; }
+    else if (v.act !== Act.Stun && v.act !== Act.Knockdown) { v.act = Act.Stagger; v.actT = 0; v.actDur = 0.5; v.draw = 0; }
+  }
+  m.emit({ t: 'kick', a: k.id, v: v.id, hit: true, broke });
+  m.damage(v, k, 10 * (1 - v.def.armor[1]), { zone: 1, dtype: 1, kind: 3, x: v.x, y: v.y + 1.0, z: v.z, dx: fx, dy: 0, dz: fz, noStagger: true });
+}
+
+// ------------------------------------------------------------------- arrows
+
+export function looseArrow(m: Match, k: Knight) {
+  const draw = k.draw;
+  const speed = lerp(ARROW.minSpeed, ARROW.maxSpeed, draw);
+  let dmg = lerp(ARROW.minDamage, ARROW.maxDamage, Math.pow(draw, 1.3));
+  const rx = Math.cos(k.yaw), rz = -Math.sin(k.yaw);
+  const fx = -Math.sin(k.yaw), fz = -Math.cos(k.yaw);
+  const ox = k.x + rx * 0.12 + fx * 0.45, oy = k.y + 1.5 * k.def.size.height, oz = k.z + rz * 0.12 + fz * 0.45;
+  let dx: number, dy: number, dz: number;
+  const inp = k.input;
+  if (inp.aimX !== undefined && inp.aimY !== undefined && inp.aimZ !== undefined) {
+    // aim at the crosshair point, compensating for the arrow's drop
+    const tx = inp.aimX - ox, ty = inp.aimY - oy, tz = inp.aimZ - oz;
+    const dist = Math.hypot(tx, tz);
+    const tFlight = dist / speed;
+    const drop = 0.5 * ARROW.gravity * tFlight * tFlight;
+    const l = Math.hypot(tx, ty + drop, tz) || 1;
+    dx = tx / l; dy = (ty + drop) / l; dz = tz / l;
+    // never shoot behind the knight
+    if (dx * fx + dz * fz < 0.2) { const cp = Math.cos(k.pitch); dx = fx * cp; dy = Math.sin(k.pitch); dz = fz * cp; }
+  } else {
+    const cp = Math.cos(k.pitch);
+    dx = fx * cp; dy = Math.sin(k.pitch); dz = fz * cp;
+  }
+  const spread = 0.004 + (1 - draw) * 0.02 + Math.min(0.03, k.moveSpeed * 0.006) + (k.drawHold > ARROW.holdTime ? 0.03 : 0);
+  dx += m.rng.gauss() * spread; dy += m.rng.gauss() * spread * 0.7; dz += m.rng.gauss() * spread;
+  const l = Math.hypot(dx, dy, dz) || 1;
+  dx /= l; dy /= l; dz /= l;
+  const bodkin = k.bodkin;
+  if (bodkin) { k.bodkin = false; dmg *= 1.35; }
+  const a: Arrow = { id: m.nextArrowId++, owner: k.id, team: k.team, x: ox, y: oy, z: oz, vx: dx * speed, vy: dy * speed, vz: dz * speed, dmg, bodkin, life: 6, pierced: -1, volley: false };
+  m.arrows.push(a);
+  m.emit({ t: 'arrow', id: a.id, k: k.id, x: ox, y: oy, z: oz, vx: a.vx, vy: a.vy, vz: a.vz, bodkin });
+}
+
+const _nrm = { x: 0, y: 1, z: 0 };
+const _mat = { mat: 0 };
+const aP = v3(), aQ = v3();
+
+export function stepArrows(m: Match, dt: number) {
+  const arrows = m.arrows;
+  for (let i = arrows.length - 1; i >= 0; i--) {
+    const a = arrows[i];
+    const px = a.x, py = a.y, pz = a.z;
+    a.vy -= ARROW.gravity * dt;
+    a.x += a.vx * dt; a.y += a.vy * dt; a.z += a.vz * dt;
+    a.life -= dt;
+    aP.x = px; aP.y = py; aP.z = pz; aQ.x = a.x; aQ.y = a.y; aQ.z = a.z;
+    // knights along the segment
+    let hitK: Knight | null = null, hitS = 2, hitZone = 1 as HitZone;
+    const mx = (px + a.x) / 2, mz = (pz + a.z) / 2;
+    const segLen = Math.hypot(a.x - px, a.z - pz);
+    m.hash.query(mx, mz, segLen / 2 + 1.5, (v) => {
+      if (!v.alive || v.id === a.owner || v.id === a.pierced || v.invulnT > 0) return;
+      if (v.team === a.team && !m.settings.friendlyFire) return;
+      hitVolumes(v, vol);
+      const tests: [V3, V3, number, HitZone][] = [[vol.head, vol.head, vol.headR, 0], [vol.torsoA, vol.torsoB, vol.torsoR, 1], [vol.legsA, vol.legsB, vol.legsR, 2]];
+      for (const [p, q, r, z] of tests) {
+        const res = segSegDist2(aP, aQ, p, q);
+        if (res.dist2 < r * r && res.s < hitS) { hitS = res.s; hitK = v; hitZone = z; }
+      }
+    });
+    const tw = m.world.raycast(px, py, pz, a.x, a.y, a.z, _nrm, _mat);
+    if (hitK && (tw < 0 || hitS <= tw)) {
+      const v = hitK as Knight;
+      const hx = px + (a.x - px) * hitS, hy = py + (a.y - py) * hitS, hz = pz + (a.z - pz) * hitS;
+      const spd = Math.hypot(a.vx, a.vy, a.vz) || 1;
+      const ndx = a.vx / spd, ndy = a.vy / spd, ndz = a.vz / spd;
+      const sh = v.shield;
+      const shieldBlock = !!sh && sh.arrows && !a.bodkin && (isBlocking(v, px, pz) || (v.act !== Act.Release && Math.abs(angleDiff(v.yaw, yawTo(v.x, v.z, px, pz))) < (sh.id === 'pavise' || sh.id === 'tower' ? 0.8 : 0.5) && hitZone !== 0 && m.rng.chance(sh.cover)));
+      if (shieldBlock) {
+        spend(v, 5);
+        m.emit({ t: 'arrowHit', id: a.id, v: v.id, x: hx, y: hy, z: hz, nx: -ndx, ny: -ndy, nz: -ndz, stuck: true, shield: true });
+        m.emit({ t: 'block', a: a.owner, v: v.id, x: hx, y: hy, z: hz, parry: false, shield: true, broke: false });
+        wearShield(m, v, a.owner, a.dmg * (a.jav ? 1.4 : 0.6), hx, hy, hz);
+        arrows.splice(i, 1);
+        continue;
+      }
+      let dmg = a.dmg * ZONE_MULT[hitZone][2] * (a.bodkin ? 1 : 1 - v.def.armor[2] * (a.jav ? 0.7 : 1));
+      if (a.volley) dmg = a.dmg * (hitZone === 0 ? 1.3 : 1) * (1 - v.def.armor[2] * 0.6);
+      const owner = m.knights[a.owner] ?? null;
+      m.damage(v, owner, dmg, { zone: hitZone, dtype: 2, kind: a.volley ? 5 : 1, x: hx, y: hy, z: hz, dx: ndx, dy: ndy, dz: ndz, noStagger: a.volley });
+      if (a.jav && v.alive) { v.pushX += ndx * 1.5; v.pushZ += ndz * 1.5; }
+      m.emit({ t: 'arrowHit', id: a.id, v: v.id, x: hx, y: hy, z: hz, nx: -ndx, ny: -ndy, nz: -ndz, stuck: true, shield: false });
+      if (a.bodkin && a.pierced < 0) { a.pierced = v.id; a.dmg *= 0.7; continue; }
+      arrows.splice(i, 1);
+      continue;
+    }
+    if (tw >= 0) {
+      const hx = px + (a.x - px) * tw, hy = py + (a.y - py) * tw, hz = pz + (a.z - pz) * tw;
+      m.emit({ t: 'arrowHit', id: a.id, v: -1, x: hx, y: hy, z: hz, nx: _nrm.x, ny: _nrm.y, nz: _nrm.z, stuck: _mat.mat !== 3, shield: false });
+      arrows.splice(i, 1);
+      continue;
+    }
+    if (a.life <= 0 || a.y < -40) arrows.splice(i, 1);
+  }
+}
+
+/** Cast a javelin along the knight's aim (the crosshair point when given). */
+export function throwJavelin(m: Match, k: Knight) {
+  const speed = 30;
+  const rx = Math.cos(k.yaw), rz = -Math.sin(k.yaw);
+  const fx = -Math.sin(k.yaw), fz = -Math.cos(k.yaw);
+  const ox = k.x + rx * 0.2 + fx * 0.5, oy = k.y + 1.65 * k.def.size.height, oz = k.z + rz * 0.2 + fz * 0.5;
+  let dx: number, dy: number, dz: number;
+  const inp = k.input;
+  if (inp.aimX !== undefined && inp.aimY !== undefined && inp.aimZ !== undefined) {
+    const tx = inp.aimX - ox, ty = inp.aimY - oy, tz = inp.aimZ - oz;
+    const dist = Math.hypot(tx, tz), tf = dist / speed, drop = 0.5 * ARROW.gravity * tf * tf;
+    const l = Math.hypot(tx, ty + drop, tz) || 1;
+    dx = tx / l; dy = (ty + drop) / l; dz = tz / l;
+    if (dx * fx + dz * fz < 0.2) { const cp = Math.cos(k.pitch); dx = fx * cp; dy = Math.sin(k.pitch); dz = fz * cp; }
+  } else {
+    // a melee knight aims with his view: lift the throw a little for the drop
+    const p = k.pitch + 0.05, cp = Math.cos(p);
+    dx = fx * cp; dy = Math.sin(p); dz = fz * cp;
+  }
+  const spread = 0.012 + Math.min(0.03, k.moveSpeed * 0.005);
+  dx += m.rng.gauss() * spread; dy += m.rng.gauss() * spread * 0.7; dz += m.rng.gauss() * spread;
+  const l = Math.hypot(dx, dy, dz) || 1;
+  dx /= l; dy /= l; dz /= l;
+  const a: Arrow = { id: m.nextArrowId++, owner: k.id, team: k.team, x: ox, y: oy, z: oz, vx: dx * speed, vy: dy * speed, vz: dz * speed, dmg: 60, bodkin: false, life: 4, pierced: -1, volley: false, jav: true };
+  m.arrows.push(a);
+  m.emit({ t: 'arrow', id: a.id, k: k.id, x: ox, y: oy, z: oz, vx: a.vx, vy: a.vy, vz: a.vz, bodkin: false, jav: true });
+}
+
+/** Lay a ground effect and tell the clients. */
+export function addHazard(m: Match, k: Knight, kind: number, x: number, z: number, r: number, dur: number) {
+  m.hazards.push({ kind, owner: k.id, team: k.team, x, z, r, t: dur, hit: [], pulse: 0 });
+  m.emit({ t: 'hazard', kind, team: k.team, x, z, r, dur });
+}
+
+export function stepHazards(m: Match, dt: number) {
+  for (let i = m.hazards.length - 1; i >= 0; i--) {
+    const h = m.hazards[i];
+    h.t -= dt;
+    if (h.t <= 0) { m.hazards.splice(i, 1); continue; }
+    const owner = m.knights[h.owner] ?? null;
+    // the fire bites in pulses (a hit is never less than a whole point)
+    h.pulse -= dt;
+    const burn = h.kind === 1 && h.pulse <= 0;
+    if (burn) h.pulse = 0.5;
+    m.hash.query(h.x, h.z, h.r + 0.5, (k) => {
+      if (!k.alive || (k.x - h.x) ** 2 + (k.z - h.z) ** 2 > h.r * h.r) return;
+      const ally = k.team === h.team;
+      if (h.kind === 2) { if (ally) k.bannerT = 0.25; return; }
+      if (ally || k.y > m.world.terrain.height(k.x, k.z) + 0.6) return;
+      if (h.kind === 0) {
+        // caltrops: a man who treads on one is lamed and bleeds; once per caltrop field
+        if (k.moveSpeed < 0.4 || h.hit.includes(k.id)) return;
+        h.hit.push(k.id);
+        k.slowT = Math.max(k.slowT, 4);
+        if (owner) applyBleed(k, owner);
+        m.damage(k, owner, 6, { zone: 2, dtype: 2, kind: 2, x: k.x, y: k.y + 0.1, z: k.z, dx: 0, dy: 1, dz: 0, noStagger: true });
+      } else if (burn) {
+        // burning pitch: about 13 a second to anyone who stands in it
+        m.damage(k, owner, 6.5, { zone: 2, dtype: 0, kind: 4, x: k.x, y: k.y + 0.4, z: k.z, dx: 0, dy: 1, dz: 0, noStagger: true });
+      }
+    });
+  }
+}
+
+export function stepVolleys(m: Match, dt: number) {
+  for (let i = m.volleys.length - 1; i >= 0; i--) {
+    const v = m.volleys[i];
+    v.delay -= dt;
+    if (v.delay > 0) continue;
+    v.timer -= dt;
+    while (v.timer <= 0 && v.left > 0) {
+      v.timer += 1.5 / 18;
+      v.left--;
+      const ang = m.rng.range(0, Math.PI * 2), r = Math.sqrt(m.rng.next()) * 6.5;
+      const tx = v.x + Math.cos(ang) * r, tz = v.z + Math.sin(ang) * r;
+      const ty = m.world.groundAt(tx, tz, 999);
+      const T = 1.15;
+      const sx = tx - v.dirx * 26, sz = tz - v.dirz * 26, sy = ty + 34;
+      const vx = (tx - sx) / T, vz = (tz - sz) / T;
+      const vy = (ty - sy + 0.5 * ARROW.gravity * T * T) / T;
+      const a: Arrow = { id: m.nextArrowId++, owner: v.owner, team: v.team, x: sx, y: sy, z: sz, vx, vy, vz, dmg: 26, bodkin: false, life: 3, pierced: -1, volley: true };
+      m.arrows.push(a);
+      m.emit({ t: 'arrow', id: a.id, k: v.owner, x: sx, y: sy, z: sz, vx, vy, vz, bodkin: false });
+    }
+    if (v.left <= 0) m.volleys.splice(i, 1);
+  }
+}
